@@ -1,8 +1,9 @@
 provider "aws" {
-  access_key = ""
-  secret_key = ""
-  region = "us-east-1"
+  secret_key = "${var.aws_secret_key}"
+  access_key = "${var.aws_access_key}"
+  region = "${var.aws_region}"
 }
+
 resource "aws_vpc" "example_vpc" {
   cidr_block = "${var.aws_vpc_cidr}"
   enable_dns_support = true
@@ -10,76 +11,88 @@ resource "aws_vpc" "example_vpc" {
     Name="example_vpc"
   }
 }
-resource "aws_subnet" "example_subnet_public" {
-  count = "${length(data.aws_availability_zones.available.names)}"
-  cidr_block = "${cidrsubnet(var.aws_vpc_cidr,8 ,count.index)}"
+
+data "aws_availability_zones" "all" {}
+
+resource "aws_subnet" "example_public_subnet" {
+  count = "${length(data.aws_availability_zones.all.names)}"
+  availability_zone = "${data.aws_availability_zones.all.names[count.index]}"
+  cidr_block = "${cidrsubnet(var.aws_vpc_cidr,8,count.index)}"
   vpc_id = "${aws_vpc.example_vpc.id}"
-  availability_zone = "${data.aws_availability_zones.available.names[count.index]}"
   map_public_ip_on_launch = true
   tags {
-    Name="example_vpc_public_subnet"
+    Name="example_public_subnet"
   }
 }
-resource "aws_subnet" "example_subnet_private" {
-  count = "${length(data.aws_availability_zones.available.names)}"
-  cidr_block = "${cidrsubnet(var.aws_vpc_cidr,8 ,7+count.index)}"
+
+resource "aws_subnet" "example_private_subnet" {
+  count = "${length(data.aws_availability_zones.all.names)}"
+  availability_zone = "${data.aws_availability_zones.all.names[count.index]}"
+  cidr_block = "${cidrsubnet(var.aws_vpc_cidr,8,length(data.aws_availability_zones.all.id)+count.index)}"
   vpc_id = "${aws_vpc.example_vpc.id}"
-  availability_zone = "${data.aws_availability_zones.available.names[count.index]}"
   map_public_ip_on_launch = false
   tags {
-    Name="example_vpc_private_subnet"
+    Name="example_private_subnet"
   }
+  depends_on = ["aws_subnet.example_public_subnet"]
 }
-resource "aws_internet_gateway" "example_internet_gateway" {
+
+resource "aws_internet_gateway" "example_inter_gw" {
   vpc_id = "${aws_vpc.example_vpc.id}"
   tags {
-    Name="example_internet_gateway"
+    Name="example_vpc_internet_gateway"
   }
 }
 
-resource "aws_route_table" "example_route_table_pub" {
+
+resource "aws_route_table" "example_vpc_route_table_public" {
   vpc_id = "${aws_vpc.example_vpc.id}"
   route {
-    cidr_block = "${var.public_subnet_igw}"
-    gateway_id = "${aws_internet_gateway.example_internet_gateway.id}"
+    cidr_block = "${var.public_cidr}"
+    gateway_id = "${aws_internet_gateway.example_inter_gw.id}"
   }
   tags {
-    Name="example_route_table"
+    Name="example_vpc_route_table_public"
   }
+}
+
+resource "aws_route_table_association" "example_public_route_table" {
+  count = "${length(data.aws_availability_zones.all.names)}"
+  route_table_id = "${aws_route_table.example_vpc_route_table_public.id}"
+  subnet_id = "${element(aws_subnet.example_public_subnet.*.id,count.index)}"
 }
 resource "aws_route" "public_internet_gw" {
-  route_table_id = "${aws_route_table.example_route_table_pub.id}"
-  destination_cidr_block = "${var.public_subnet_igw}"
-  gateway_id = "${aws_internet_gateway.example_internet_gateway.id}"
+  route_table_id = "${aws_route_table.example_vpc_route_table_public.id}"
+  destination_cidr_block = "${var.public_cidr}"
+  gateway_id = "${aws_internet_gateway.example_inter_gw.id}"
 }
-resource "aws_route_table_association" "example_public_rt" {
-  count = "${length(data.aws_availability_zones.available.names)}"
-  route_table_id = "${aws_route_table.example_route_table_pub.id}"
-  subnet_id = "${element(aws_subnet.example_subnet_public.*.id,count.index)}"
-}
-resource "aws_route_table" "example_route_table_priv" {
-  vpc_id = "${aws_vpc.example_vpc.id}"
-  route {
-    cidr_block = "${var.public_subnet_igw}"
-    gateway_id = "${aws_nat_gateway.example_nat_gw.id}"
-  }
+resource "aws_eip" "example_eip_nat_gw" {
+  vpc = true
+  count = "${length(data.aws_availability_zones.all.names)}"
   tags {
-    Name="example_route_table_priv"
+    Name="example_eip_nat_gw.${count.index}"
   }
-}
-resource "aws_route_table_association" "example_private_rt" {
-  count = "${length(data.aws_availability_zones.available.names)}"
-  route_table_id = "${aws_route_table.example_route_table_priv.id}"
-  subnet_id = "${element(aws_subnet.example_subnet_private.*.id,count.index)}"
 }
 
-resource "aws_eip" "example_nt_gw_eip" {
-  vpc = true
+resource "aws_nat_gateway" "example_nat_gw" {
+  count = "${length(data.aws_availability_zones.all.names)}"
+  allocation_id = "${element(aws_eip.example_eip_nat_gw.*.id, count.index)}"
+  subnet_id = "${element(aws_subnet.example_public_subnet.*.id, count.index)}"
+  depends_on = ["aws_internet_gateway.example_inter_gw"]
+}
+
+resource "aws_route_table" "example_vpc_route_table_private" {
+  vpc_id = "${aws_vpc.example_vpc.id}"
+  route {
+    cidr_block = "${var.public_cidr}"
+    nat_gateway_id = "${element(aws_nat_gateway.example_nat_gw.*.id, count.index)}"
+  }
   tags {
-    Name="example_eip"
+    Name="example_vpc_route_table_private"
   }
 }
-resource "aws_nat_gateway" "example_nat_gw" {
-  allocation_id = "${aws_eip.example_nt_gw_eip.id}"
-  subnet_id = "${element(aws_subnet.example_subnet_public.*.id,0)}"
+resource "aws_route_table_association" "example_rt_private_pool" {
+  count = "${length(data.aws_availability_zones.all.names)}"
+  route_table_id = "${aws_route_table.example_vpc_route_table_private.id}"
+  subnet_id = "${element(aws_subnet.example_private_subnet.*.id, count.index)}"
 }

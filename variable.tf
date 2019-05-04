@@ -1,10 +1,21 @@
+variable "aws_secret_key" {
+  description = "AWS IAM secret key for accessing AWS API"
+}
+
+variable "aws_access_key" {
+  description = "AWS access key for accessing AWS API"
+}
+
+variable "aws_region" {
+  description = "aws region in which deployment needs to be done"
+  default = "ap-south-1"
+}
+
 variable "aws_vpc_cidr" {
-  description = "AWS VPC CIDR range"
+  description = "AWS VPC CIDR which you want to create"
   default = "10.0.0.0/16"
 }
-data "aws_availability_zones" "available" {}
 
-variable "public_subnet_igw" {
-  description = "Gateway Whitelisting"
+variable "public_cidr" {
   default = "0.0.0.0/0"
 }
