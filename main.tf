@@ -8,3 +8,7 @@ module "VPC" {
   aws_vpc_cidr = "${var.aws_vpc_cidr}"
   public_cidr = "${var.public_cidr}"
 }
+module "iam" {
+  source = "./modules/iam"
+}
+
